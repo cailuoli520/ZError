@@ -20,7 +20,7 @@
 
 ```bash
 git clone -b vps-server https://github.com/cailuoli520/ZError.git zerror && cd zerror
-cp deploy/.env.example deploy/.env
+cp deploy/env.example deploy/.env
 # 编辑 deploy/.env：
 #   没有域名 → SITE_ADDRESS=:80（保持默认，用 http://服务器IP 访问）
 #   有域名   → SITE_ADDRESS=你的域名（Caddy 自动申请证书，http 自动跳转 https）

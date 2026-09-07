@@ -4,7 +4,7 @@
 # 有域名（自动申请证书，HTTPS）：    SITE_ADDRESS=qa.example.com
 # 仅改 deploy/.env 中的 SITE_ADDRESS 并重启 caddy 即可切换，服务端无需改动。
 #
-# 1) cp deploy/.env.example deploy/.env 并按需填写
+# 1) cp deploy/env.example deploy/.env 并按需填写
 # 2) docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 services:
   zerror:
