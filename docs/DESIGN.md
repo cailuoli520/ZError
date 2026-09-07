@@ -38,14 +38,13 @@ ZError/
 │       │   ├── public.rs   HEAD /、GET /api/status、GET|POST /query、POST /api/questions/{id}/pending-correction
 │       │   ├── admin.rs    /api/login 与 /api/admin/** 全部管理接口
 │       │   └── sse.rs      GET /api/admin/logs/stream
+│       ├── tls.rs          加载外部 PEM 证书并按 mtime 热加载（不申请/续签）
 │       └── web.rs          rust-embed 嵌入 ../web/dist
 ├── web/                    Vue 3 + Vite 管理后台（从上游 src/ 移植，去 Tauri）
 ├── deploy/
-│   ├── Dockerfile          多阶段：node 构建 web → rust 构建 server → debian-slim 运行
-│   ├── docker-compose.yml  zerror + caddy（自动 HTTPS）
-│   ├── Caddyfile
+│   ├── env.example         环境变量示例（/etc/zerror/env）
 │   ├── zerror.service      systemd unit
-│   └── install.sh          原生安装脚本（下载/构建二进制、建用户、装 unit）
+│   └── install.sh          安装脚本（构建/安装二进制、建用户、装 unit、可选 --cert/--key）
 ├── docs/
 │   ├── DESIGN.md           本文
 │   └── API.md              REST 接口详细说明（由本文 §6 生成）
@@ -61,7 +60,8 @@ ZError/
 | `ZERROR_ADMIN_TOKEN` | 无 | 首次启动时若 `settings.json` 中 `adminToken` 为空，则用此值；仍为空则随机生成并打印到日志且写入 `settings.json` |
 | `ZERROR_PUBLIC_URL` | 无 | 对外访问的根 URL（如 `https://qa.example.com`）；为空时由 `X-Forwarded-Proto` / `X-Forwarded-Host` / `Host` 推断 |
 | `ZERROR_LOG` | `info` | `tracing` 过滤器 |
-| `ZERROR_TRUST_PROXY` | `true` | 是否信任 `X-Forwarded-For` 作为客户端 IP |
+| `ZERROR_TRUST_PROXY` | `true` | 是否信任 `X-Forwarded-For` / `X-Forwarded-Proto`（直接对外服务时应为 `false`） |
+| `ZERROR_TLS_CERT` / `ZERROR_TLS_KEY` | 无 | PEM 证书链与私钥路径；两者同时设置即以 HTTPS 监听，文件 mtime 变化后 60 s 内热加载 |
 
 ## 4. 持久化
 
@@ -208,8 +208,8 @@ CREATE INDEX IF NOT EXISTS idx_airesponses_createtime ON AIResponses(CreateTime)
 
 ## 9. 部署
 
-- Docker：`deploy/Dockerfile`（多阶段）；`docker-compose.yml` 含 `zerror`（卷 `./data:/data`，`ZERROR_DATA_DIR=/data`）与 `caddy`（`Caddyfile` 反代 `zerror:3000`，域名通过 `.env` 的 `DOMAIN`）。
-- systemd：`install.sh` 创建 `zerror` 用户、`/opt/zerror/zerror-server`、`/var/lib/zerror`，安装 `zerror.service`（`EnvironmentFile=/etc/zerror/env`），HTTPS 由用户自配 Caddy/Nginx（README 给出 Caddy 示例）。
+- 仅 systemd：`install.sh` 创建 `zerror` 用户、`/opt/zerror/zerror-server`、`/var/lib/zerror`，安装 `zerror.service`（`EnvironmentFile=/etc/zerror/env`，`AmbientCapabilities=CAP_NET_BIND_SERVICE`）。
+- HTTPS 由程序自身终止 TLS（axum-server + rustls/ring）：证书申请与续签交给外部证书管理器，程序只读取 `ZERROR_TLS_CERT/KEY` 并在文件更新后热加载。不再提供 Docker / Caddy。
 
 ## 10. 非目标 / 已知取舍
 

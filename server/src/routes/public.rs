@@ -101,7 +101,11 @@ pub fn resolve_request_origin(state: &AppState, headers: &HeaderMap) -> String {
         return u.clone();
     }
     let hv = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(|s| s.trim()).filter(|s| !s.is_empty());
-    let proto = hv("x-forwarded-proto").map(|s| s.split(',').next().unwrap_or("http").trim().to_string()).unwrap_or_else(|| "http".into());
+    let default_scheme = if state.runtime.tls_enabled() { "https" } else { "http" };
+    let proto = hv("x-forwarded-proto")
+        .filter(|_| state.runtime.trust_proxy)
+        .map(|s| s.split(',').next().unwrap_or(default_scheme).trim().to_string())
+        .unwrap_or_else(|| default_scheme.into());
     let host = hv("x-forwarded-host")
         .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
         .or_else(|| hv("host").map(|s| s.to_string()))

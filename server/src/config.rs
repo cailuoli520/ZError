@@ -16,6 +16,9 @@ pub struct RuntimeConfig {
     pub admin_token_env: Option<String>,
     pub public_url: Option<String>,
     pub trust_proxy: bool,
+    /// TLS 证书链与私钥（PEM）；两者都设置时以 HTTPS 监听
+    pub tls_cert: Option<PathBuf>,
+    pub tls_key: Option<PathBuf>,
 }
 
 impl RuntimeConfig {
@@ -38,13 +41,25 @@ impl RuntimeConfig {
         let trust_proxy = std::env::var("ZERROR_TRUST_PROXY")
             .map(|v| !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "no"))
             .unwrap_or(true);
+        let env_path = |k: &str| std::env::var(k).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let tls_cert = env_path("ZERROR_TLS_CERT");
+        let tls_key = env_path("ZERROR_TLS_KEY");
+        if tls_cert.is_some() != tls_key.is_some() {
+            anyhow::bail!("ZERROR_TLS_CERT 与 ZERROR_TLS_KEY 必须同时设置");
+        }
         Ok(Self {
             data_dir,
             bind,
             admin_token_env,
             public_url,
             trust_proxy,
+            tls_cert,
+            tls_key,
         })
+    }
+
+    pub fn tls_enabled(&self) -> bool {
+        self.tls_cert.is_some() && self.tls_key.is_some()
     }
 
     pub fn db_path(&self) -> PathBuf {

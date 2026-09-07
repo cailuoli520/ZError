@@ -9,10 +9,11 @@ User=zerror
 Group=zerror
 EnvironmentFile=-/etc/zerror/env
 Environment=ZERROR_DATA_DIR=/var/lib/zerror
-Environment=ZERROR_BIND=127.0.0.1:3000
 ExecStart=/opt/zerror/zerror-server
 Restart=on-failure
 RestartSec=3
+# 允许绑定 80/443 等特权端口
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 # 加固
 NoNewPrivileges=true
 ProtectSystem=strict

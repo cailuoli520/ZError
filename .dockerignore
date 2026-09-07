@@ -1,5 +1,0 @@
-server/target
-web/node_modules
-web/dist
-deploy/data
-.git

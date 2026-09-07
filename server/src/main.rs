@@ -10,6 +10,7 @@ mod matching;
 mod prompt;
 mod routes;
 mod state;
+mod tls;
 mod web;
 
 use std::sync::atomic::AtomicI64;
@@ -70,20 +71,38 @@ async fn main() -> anyhow::Result<()> {
         last_ocs_contact_at: AtomicI64::new(0),
     });
 
-    let app = routes::build_router(state.clone());
-    let listener = tokio::net::TcpListener::bind(runtime.bind).await?;
+    let app = routes::build_router(state.clone())
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+
+    let scheme = if runtime.tls_enabled() { "https" } else { "http" };
     tracing::info!(
-        "ZError Server v{} 已启动: http://{}  数据目录: {}",
+        "ZError Server v{} 已启动: {}://{}  数据目录: {}",
         VERSION,
+        scheme,
         runtime.bind,
         runtime.data_dir.display()
     );
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+
+    // 优雅退出：收到信号后给在途请求 10 秒
+    let handle = axum_server::Handle::new();
+    let shutdown_handle = handle.clone();
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        shutdown_handle.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+    });
+
+    match (&runtime.tls_cert, &runtime.tls_key) {
+        (Some(cert), Some(key)) => {
+            let tls_config = tls::load_and_watch(cert.clone(), key.clone()).await?;
+            axum_server::bind_rustls(runtime.bind, tls_config)
+                .handle(handle)
+                .serve(app)
+                .await?;
+        }
+        _ => {
+            axum_server::bind(runtime.bind).handle(handle).serve(app).await?;
+        }
+    }
     Ok(())
 }
 
