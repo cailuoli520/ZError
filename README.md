@@ -16,17 +16,21 @@
 
 ## 快速开始（Docker Compose，推荐）
 
-需要一台有公网 IP 的 Linux VPS，一个已解析到该 IP 的域名，开放 80/443。
+需要一台有公网 IP 的 Linux VPS，已安装 Docker，防火墙放开 80（如需 HTTPS 再放开 443）。
 
 ```bash
-git clone <本仓库> zerror && cd zerror
+git clone -b vps-server https://github.com/cailuoli520/ZError.git zerror && cd zerror
 cp deploy/.env.example deploy/.env
-# 编辑 deploy/.env：DOMAIN=你的域名，ZERROR_ADMIN_TOKEN=自定义管理员令牌（可留空自动生成）
+# 编辑 deploy/.env：
+#   没有域名 → SITE_ADDRESS=:80（保持默认，用 http://服务器IP 访问）
+#   有域名   → SITE_ADDRESS=你的域名（Caddy 自动申请证书，http 自动跳转 https）
+#   ZERROR_ADMIN_TOKEN=自定义管理员令牌（可留空自动生成）
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 docker compose -f deploy/docker-compose.yml logs -f zerror   # 首次启动会打印管理员令牌
 ```
 
-打开 `https://你的域名`，用管理员令牌登录。
+- 无域名：浏览器打开 `http://服务器IP`，OCS 的题库地址为 `http://服务器IP/query?token=…`。
+- 之后有了域名：把 DNS 解析到服务器，改 `deploy/.env` 的 `SITE_ADDRESS=你的域名`，再执行一次 `docker compose ... up -d`，即自动切到 HTTPS；服务端根据 Caddy 传来的 `X-Forwarded-Proto` 自动生成正确的链接，OCS 里把地址改成 `https://` 即可。
 
 ## 原生安装（systemd）
 

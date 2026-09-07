@@ -1,4 +1,6 @@
-{$DOMAIN} {
+# SITE_ADDRESS=:80            → 纯 HTTP（无域名，用 IP 访问）
+# SITE_ADDRESS=qa.example.com → 自动 HTTPS（Let's Encrypt），并把 80 端口的 HTTP 重定向到 HTTPS
+{$SITE_ADDRESS} {
 	encode zstd gzip
 	# SSE 需要禁用缓冲，flush_interval -1 表示立即转发
 	reverse_proxy zerror:3000 {

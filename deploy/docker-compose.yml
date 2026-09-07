@@ -1,5 +1,10 @@
-# ZError Server + Caddy（自动 HTTPS）
-# 1) cp deploy/.env.example deploy/.env 并填写 DOMAIN / ZERROR_ADMIN_TOKEN
+# ZError Server + Caddy 反向代理
+#
+# 无域名（纯 HTTP，用 IP 访问）：   SITE_ADDRESS=:80
+# 有域名（自动申请证书，HTTPS）：    SITE_ADDRESS=qa.example.com
+# 仅改 deploy/.env 中的 SITE_ADDRESS 并重启 caddy 即可切换，服务端无需改动。
+#
+# 1) cp deploy/.env.example deploy/.env 并按需填写
 # 2) docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 services:
   zerror:
@@ -13,7 +18,8 @@ services:
       ZERROR_DATA_DIR: /data
       ZERROR_BIND: 0.0.0.0:3000
       ZERROR_ADMIN_TOKEN: ${ZERROR_ADMIN_TOKEN:-}
-      ZERROR_PUBLIC_URL: https://${DOMAIN}
+      # 留空则按 Caddy 传来的 X-Forwarded-Proto/Host 自动推断（http 或 https 都能正确生成链接）
+      ZERROR_PUBLIC_URL: ${ZERROR_PUBLIC_URL:-}
       ZERROR_LOG: ${ZERROR_LOG:-info}
       ZERROR_TRUST_PROXY: "true"
     volumes:
@@ -28,7 +34,7 @@ services:
     depends_on:
       - zerror
     environment:
-      DOMAIN: ${DOMAIN}
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     ports:
       - "80:80"
       - "443:443"
