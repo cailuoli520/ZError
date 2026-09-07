@@ -1,0 +1,806 @@
+<script setup lang="ts">
+import { ref, onMounted, onUnmounted, computed } from "vue";
+import AppHeader from "./views/AppHeader.vue";
+import Sidebar from "./views/Sidebar.vue";
+import Login from "./views/Login.vue";
+import Home from "./views/Home.vue";
+import Settings from "./views/Settings.vue";
+import QuestionBank from "./views/QuestionBank.vue";
+import FileTree from "./views/questions/FileTree.vue";
+import { databaseService } from "./services/database";
+import { initializationService } from "./services/initialization";
+import { getAdminToken, onUnauthorized } from "./services/api";
+import { bus } from "./services/bus";
+import { initGlobalTheme } from "./composables/useTheme";
+import { useExclusiveMenu } from "./composables/useExclusiveMenu";
+
+// 当前活跃的页面
+const activeTab = ref('home');
+// 顶层 tab 切换时用于触发各视图折叠的触发器
+const collapseTrigger = ref(0);
+const questionBankFocusFolderId = ref<number | null>(null);
+const questionBankFocusRequestKey = ref(0);
+
+// 登录门：未登录时渲染登录页；登录后先拉取设置/模型配置再渲染主界面
+const isLoggedIn = ref(!!getAdminToken());
+const appReady = ref(false);
+const bootstrapError = ref('');
+
+const bootstrap = async () => {
+  appReady.value = false;
+  bootstrapError.value = '';
+  try {
+    await initializationService.initialize();
+    // 服务端设置已加载，重新应用主题
+    await initGlobalTheme();
+    appReady.value = true;
+  } catch (error) {
+    console.error('应用初始化失败:', error);
+    // 401 已由 api.ts 触发回到登录页，这里只处理其它错误
+    if (getAdminToken()) {
+      bootstrapError.value = (error as Error)?.message || '初始化失败';
+    }
+  }
+};
+
+const handleAuthLogin = () => {
+  isLoggedIn.value = true;
+  bootstrap();
+};
+
+const handleAuthLogout = () => {
+  initializationService.reset();
+  isLoggedIn.value = false;
+  appReady.value = false;
+  bootstrapError.value = '';
+  activeTab.value = 'home';
+  showImportDialog.value = false;
+};
+
+let offUnauthorized: (() => void) | null = null;
+
+// 暴露到全局 window，供开发者控制台调试
+onMounted(() => {
+  ;(window as any).startTutorial = () => {
+    localStorage.removeItem('tutorial_stepper_finished');
+    window.dispatchEvent(new Event('start-tutorial'));
+    console.log('新手引导已重置并启动！');
+  };
+});
+
+// 导航处理函数
+const handleNavigate = (tab: string) => {
+  // 仅在实际切换到不同 tab 时触发折叠
+  if (activeTab.value !== tab) {
+    activeTab.value = tab;
+    // 增加触发器版本，通知子视图收缩详情面板
+    collapseTrigger.value++;
+  } else {
+    activeTab.value = tab;
+  }
+};
+
+// 步骤条跳转引导
+const handleGuideAction = (target: string) => {
+  if (target === 'model-settings') {
+    handleNavigate('settings')
+    setTimeout(() => {
+      // 触发模型设置内部事件（如果是通过 router 可能不同，这里触发一个自定义事件以便 Settings.vue 切换到模型设置）
+      window.dispatchEvent(new Event('open-model-settings'))
+    }, 100)
+  } else if (target === 'home') {
+    handleNavigate('home')
+  } else if (target === 'ocs-config') {
+    handleNavigate('home')
+    setTimeout(() => {
+      // 通知 Home 组件打开 OCS 配置窗口
+      window.dispatchEvent(new Event('open-ocs-config'))
+    }, 100)
+  }
+}
+
+const handleOpenQuestionFolder = (folderId: number) => {
+  handleNavigate('questions');
+  questionBankFocusFolderId.value = folderId;
+  questionBankFocusRequestKey.value++;
+};
+
+const showImportDialog = ref(false);
+const closeImportDialog = () => {
+  showImportDialog.value = false;
+};
+
+const importItems = ref<any[]>([]);
+const importTreeRef = ref<any>(null);
+const selectedImportFolderId = ref<number | null>(null);
+const selectedImportFolderName = ref("");
+const importing = ref(false);
+type EditableTarget = HTMLInputElement | HTMLTextAreaElement
+
+const inputContextMenuVisible = ref(false)
+useExclusiveMenu('global-input-context-menu', inputContextMenuVisible)
+const inputContextMenuX = ref(0)
+const inputContextMenuY = ref(0)
+const inputContextMenuTarget = ref<EditableTarget | null>(null)
+
+const supportedInputTypes = new Set(['', 'text', 'search', 'url', 'tel', 'password', 'email', 'number'])
+
+const isEditableTarget = (target: EventTarget | null): target is EditableTarget => {
+  if (target instanceof HTMLTextAreaElement) return true
+  if (target instanceof HTMLInputElement) return supportedInputTypes.has(target.type)
+  return false
+}
+
+const findEditableTarget = (target: EventTarget | null): EditableTarget | null => {
+  let current = target instanceof HTMLElement ? target : null
+  while (current) {
+    if (isEditableTarget(current)) return current
+    current = current.parentElement
+  }
+  return null
+}
+
+const getSelectionRange = (target: EditableTarget) => {
+  try {
+    const start = target.selectionStart ?? 0
+    const end = target.selectionEnd ?? start
+    return { start, end }
+  } catch {
+    return { start: 0, end: 0 }
+  }
+}
+
+const getSelectedText = (target: EditableTarget | null) => {
+  if (!target) return ''
+  const { start, end } = getSelectionRange(target)
+  return target.value.slice(start, end)
+}
+
+const focusTarget = (target: EditableTarget | null) => {
+  if (!target) return
+  target.focus()
+}
+
+const emitInputEvent = (target: EditableTarget) => {
+  target.dispatchEvent(new Event('input', { bubbles: true }))
+  target.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+// 写剪贴板：优先 navigator.clipboard，失败时回退 execCommand('copy')（依赖当前选区）
+const writeClipboardText = async (text: string) => {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {}
+  try {
+    return document.execCommand('copy')
+  } catch {
+    return false
+  }
+}
+
+// 读剪贴板：优先 navigator.clipboard，失败时回退 execCommand('paste')（大多数浏览器不支持）
+const readClipboardText = async (target?: EditableTarget | null) => {
+  try {
+    if (navigator.clipboard?.readText) {
+      return await navigator.clipboard.readText()
+    }
+  } catch {}
+  if (target) {
+    try {
+      const before = target.value
+      if (document.execCommand('paste') && target.value !== before) {
+        // 已直接粘贴进输入框，无需再次写入
+        emitInputEvent(target)
+        return ''
+      }
+    } catch {}
+  }
+  return null
+}
+
+const replaceSelectedText = (target: EditableTarget, text: string) => {
+  focusTarget(target)
+  try {
+    const { start, end } = getSelectionRange(target)
+    target.setRangeText(text, start, end, 'end')
+  } catch {
+    target.value = text
+  }
+  emitInputEvent(target)
+}
+
+const hideInputContextMenu = () => {
+  inputContextMenuVisible.value = false
+  inputContextMenuTarget.value = null
+}
+
+const updateInputContextMenuPosition = (x: number, y: number) => {
+  const menuWidth = 150
+  const menuHeight = 164
+  inputContextMenuX.value = Math.min(x, window.innerWidth - menuWidth - 8)
+  inputContextMenuY.value = Math.min(y, window.innerHeight - menuHeight - 8)
+}
+
+const handleGlobalContextMenu = (event: MouseEvent) => {
+  const menuElement = event.target instanceof HTMLElement ? event.target.closest('.global-input-context-menu') : null
+  if (menuElement) return
+
+  const target = findEditableTarget(event.target)
+  if (!target || target.disabled) {
+    hideInputContextMenu()
+    return
+  }
+
+  event.preventDefault()
+  focusTarget(target)
+  inputContextMenuTarget.value = target
+  updateInputContextMenuPosition(event.clientX, event.clientY)
+  inputContextMenuVisible.value = true
+}
+
+const handleGlobalPointerDown = (event: MouseEvent) => {
+  const menuElement = event.target instanceof HTMLElement ? event.target.closest('.global-input-context-menu') : null
+  if (!menuElement) {
+    hideInputContextMenu()
+  }
+}
+
+const handleGlobalKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape') {
+    hideInputContextMenu()
+  }
+}
+
+const canCutInput = computed(() => {
+  const target = inputContextMenuTarget.value
+  return !!target && !target.readOnly && getSelectedText(target).length > 0
+})
+
+const canCopyInput = computed(() => getSelectedText(inputContextMenuTarget.value).length > 0)
+
+const canPasteInput = computed(() => {
+  const target = inputContextMenuTarget.value
+  return !!target && !target.readOnly && !target.disabled
+})
+
+const canSelectAllInput = computed(() => {
+  const target = inputContextMenuTarget.value
+  return !!target && target.value.length > 0
+})
+
+const handleInputCopy = async () => {
+  const target = inputContextMenuTarget.value
+  const text = getSelectedText(target)
+  if (!target || !text) return
+  focusTarget(target)
+  await writeClipboardText(text)
+  hideInputContextMenu()
+}
+
+const handleInputCut = async () => {
+  const target = inputContextMenuTarget.value
+  const text = getSelectedText(target)
+  if (!target || target.readOnly || !text) return
+  focusTarget(target)
+
+  const ok = await writeClipboardText(text)
+  if (!ok) return
+
+  const { start } = getSelectionRange(target)
+  replaceSelectedText(target, '')
+  try {
+    target.setSelectionRange(start, start)
+  } catch {}
+  hideInputContextMenu()
+}
+
+const handleInputPaste = async () => {
+  const target = inputContextMenuTarget.value
+  if (!target || target.readOnly || target.disabled) return
+  focusTarget(target)
+  const text = await readClipboardText(target)
+  if (text === null) return
+  if (text) replaceSelectedText(target, text)
+  hideInputContextMenu()
+}
+
+const handleInputSelectAll = () => {
+  const target = inputContextMenuTarget.value
+  if (!target) return
+  focusTarget(target)
+  target.select()
+  hideInputContextMenu()
+}
+
+const normalizeImportItems = (items: any): any[] => {
+  const arr = Array.isArray(items) ? items : [];
+  return arr.map((x: any) => {
+    const q = x?.Question ?? x?.question ?? "";
+    const opts = x?.Options ?? x?.options ?? null;
+    const ans = x?.Answer ?? x?.answer ?? "";
+    const type = x?.QuestionType ?? x?.question_type ?? "";
+    return { content: String(q), options: Array.isArray(opts) ? opts : (typeof opts === "string" ? opts : null), answer: String(ans), question_type: String(type) };
+  });
+};
+
+const handleFolderSelect = (folderId: number, folderName: string) => {
+  selectedImportFolderId.value = folderId;
+  selectedImportFolderName.value = folderName;
+};
+
+  const handleImportConfirm = async () => {
+    const folderId = selectedImportFolderId.value;
+    if (folderId === null) return;
+    if (!importItems.value || importItems.value.length === 0) return;
+    importing.value = true;
+    try {
+      const items = importItems.value
+        .map((item: any) => {
+          const content = String(item.content || item.question || "");
+          const optionsStr = Array.isArray(item.options) ? item.options.join("\n") : (typeof item.options === "string" ? item.options : null);
+          const answerStr = String(item.answer ?? "");
+          const questionType = item.question_type ? String(item.question_type) : null;
+          return { content, options: optionsStr, answer: answerStr, questionType, folderId };
+        })
+        .filter(item => item.content);
+      const { inserted } = items.length
+        ? await databaseService.addQuestionsBulk(items)
+        : { inserted: 0 };
+      const count = inserted;
+      showImportDialog.value = false;
+
+      // 发出全局事件，通知其他组件刷新数据
+      bus.emit('refresh-data');
+
+      try { importTreeRef.value?.refreshData?.(); } catch {}
+      alert(`成功导入 ${count} 条数据！`);
+    } catch (e) {
+      console.error('导入失败:', e);
+      alert('导入失败: ' + (e as Error).message);
+    } finally {
+      importing.value = false;
+    }
+  };
+
+const handleOpenImportDialog = (payload: { items: any[] }) => {
+  console.log('收到导入事件:', payload);
+  importItems.value = normalizeImportItems(payload?.items);
+  showImportDialog.value = true;
+};
+
+onMounted(() => {
+  bus.on('open-import-dialog', handleOpenImportDialog);
+  (window as any).__appImportDialogReady = true;
+  document.addEventListener('contextmenu', handleGlobalContextMenu, true)
+  document.addEventListener('mousedown', handleGlobalPointerDown, true)
+  document.addEventListener('keydown', handleGlobalKeydown, true)
+  window.addEventListener('resize', hideInputContextMenu)
+  window.addEventListener('blur', hideInputContextMenu)
+});
+
+// 登录状态与应用初始化
+onMounted(() => {
+  bus.on('auth-login', handleAuthLogin);
+  bus.on('auth-logout', handleAuthLogout);
+  offUnauthorized = onUnauthorized(handleAuthLogout);
+  if (isLoggedIn.value) {
+    bootstrap();
+  }
+});
+
+onUnmounted(() => {
+  bus.off('open-import-dialog', handleOpenImportDialog);
+  bus.off('auth-login', handleAuthLogin);
+  bus.off('auth-logout', handleAuthLogout);
+  offUnauthorized?.();
+  offUnauthorized = null;
+  document.removeEventListener('contextmenu', handleGlobalContextMenu, true)
+  document.removeEventListener('mousedown', handleGlobalPointerDown, true)
+  document.removeEventListener('keydown', handleGlobalKeydown, true)
+  window.removeEventListener('resize', hideInputContextMenu)
+  window.removeEventListener('blur', hideInputContextMenu)
+})
+
+
+
+</script>
+
+<template>
+  <!-- 登录页 -->
+  <Login v-if="!isLoggedIn" />
+
+  <!-- 初始化中 / 初始化失败 -->
+  <div v-else-if="!appReady" class="app-bootstrap">
+    <template v-if="bootstrapError">
+      <div class="app-bootstrap-text">初始化失败：{{ bootstrapError }}</div>
+      <button class="app-bootstrap-retry" @click="bootstrap">重试</button>
+    </template>
+    <div v-else class="app-bootstrap-text">正在加载配置…</div>
+  </div>
+
+  <div v-else class="app-container">
+    <!-- 自定义Header -->
+    <AppHeader :active-tab="activeTab" @guide-to="handleGuideAction" />
+
+    
+    <!-- 主要内容区域 -->
+    <div class="main-content">
+      <!-- 侧边导航栏 -->
+      <Sidebar :active-tab="activeTab" @navigate="handleNavigate" />
+      
+      <!-- 内容区域 -->
+      <div class="content-area">
+        <!-- 首页 -->
+        <div v-show="activeTab === 'home'" class="content-view">
+          <Home :collapse-trigger="collapseTrigger" @navigate="handleNavigate" />
+        </div>
+        
+        <!-- 题库页面 -->
+        <div v-show="activeTab === 'questions'" class="content-view">
+          <QuestionBank
+            :collapse-trigger="collapseTrigger"
+            :focus-folder-id="questionBankFocusFolderId"
+            :focus-folder-request-key="questionBankFocusRequestKey"
+          />
+        </div>
+        
+        <!-- 设置页面 -->
+        <div v-show="activeTab === 'settings'" class="content-view">
+          <Settings @open-question-folder="handleOpenQuestionFolder" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div v-if="appReady && showImportDialog" class="modal" @click="closeImportDialog">
+    <div class="modal-content" @click.stop>
+      <div class="modal-header">
+        <span>导入</span>
+        <button @click="closeImportDialog">×</button>
+      </div>
+      <div class="modal-body">
+        <FileTree style="border-radius: 6px;" ref="importTreeRef" @folder-select="handleFolderSelect" />
+      </div>
+      <div class="modal-footer">
+        <div class="footer-info">
+          <span>目标文件夹：{{ selectedImportFolderName || '未选择' }}</span>
+          <span style="margin-left:12px;">待导入：{{ importItems.length }} 条</span>
+        </div>
+        <div class="footer-actions">
+          <button @click="closeImportDialog" :disabled="importing">取消</button>
+          <button @click="handleImportConfirm" :disabled="importing || selectedImportFolderId === null || !importItems.length">导入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <Transition name="context-menu-pop">
+    <div
+      v-if="inputContextMenuVisible"
+      class="global-input-context-menu"
+      :style="{ left: `${inputContextMenuX}px`, top: `${inputContextMenuY}px` }"
+    >
+      <button class="global-input-context-menu-item" :disabled="!canCutInput" @click="handleInputCut">剪切</button>
+      <button class="global-input-context-menu-item" :disabled="!canCopyInput" @click="handleInputCopy">复制</button>
+      <button class="global-input-context-menu-item" :disabled="!canPasteInput" @click="handleInputPaste">粘贴</button>
+      <button class="global-input-context-menu-item" :disabled="!canSelectAllInput" @click="handleInputSelectAll">全选</button>
+    </div>
+  </Transition>
+</template>
+
+<style scoped>
+.logo.vite:hover {
+  filter: drop-shadow(0 0 2em #747bff);
+}
+
+.logo.vue:hover {
+  filter: drop-shadow(0 0 2em #249b73);
+}
+
+</style>
+<style>
+
+
+
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--bg-tertiary, #f4f4f4);
+  color: var(--text-primary, #2d3748);
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: var(--bg-tertiary, #f4f4f4);
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background-color: var(--bg-tertiary, #f4f4f4);
+}
+
+.app-bootstrap {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background-color: var(--bg-tertiary, #f4f4f4);
+}
+
+.app-bootstrap-text {
+  font-size: 14px;
+  color: var(--text-secondary, #718096);
+}
+
+.app-bootstrap-retry {
+  padding: 6px 16px;
+  font-size: 13px;
+  border: 1px solid var(--border-color, #e2e8f0);
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+}
+
+.content-area {
+  margin-bottom: 100px;
+  width: 100%;
+  height: 100%;
+  flex: 1;
+  overflow: hidden;
+  background-color: var(--bg-primary, #f4f4f4);
+  position: relative;
+}
+
+/* 确保所有页面组件占满容器并正确定位 */
+.content-view {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+}
+
+.content-view > * {
+  width: 100%;
+  height: 100%;
+}
+
+
+:root {
+  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+
+  color: var(--text-primary, #0f0f0f);
+  background-color: var(--bg-tertiary, #f6f6f6);
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+.container {
+  margin: 0;
+  padding-top: 10vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  text-align: center;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: 0.75s;
+}
+
+.logo.tauri:hover {
+  filter: drop-shadow(0 0 2em #24c8db);
+}
+
+.row {
+  display: flex;
+  justify-content: center;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+
+a:hover {
+  color: #535bf2;
+}
+
+.global-input-context-menu {
+  position: fixed;
+  z-index: 100000;
+  min-width: 150px;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--border-primary, #e2e8f0);
+  background: var(--bg-secondary, #ffffff);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transform-origin: top left;
+}
+
+.context-menu-pop-enter-active,
+.context-menu-pop-leave-active {
+  transition: opacity 0.14s ease, transform 0.16s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.context-menu-pop-enter-from,
+.context-menu-pop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.96);
+}
+
+.context-menu-pop-enter-to,
+.context-menu-pop-leave-from {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.global-input-context-menu-item {
+  border: none;
+  background: transparent;
+  color: var(--text-primary, #2d3748);
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.global-input-context-menu-item:hover:not(:disabled) {
+  background: var(--hover-bg, rgba(0, 0, 0, 0.06));
+}
+
+.global-input-context-menu-item:disabled {
+  color: var(--text-disabled, #a0aec0);
+  cursor: not-allowed;
+}
+
+h1 {
+  text-align: center;
+}
+
+input,
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--text-primary, #0f0f0f);
+  background-color: var(--bg-primary, #ffffff);
+  transition: border-color 0.25s;
+  /* box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2); */
+}
+
+button {
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--color-primary, #396cd8);
+}
+button:active {
+  border-color: var(--color-primary, #396cd8);
+  background-color: var(--active-bg, #e8e8e8);
+}
+
+input,
+button {
+  outline: none;
+}
+
+#greet-input {
+  margin-right: 5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: var(--text-primary, #f6f6f6);
+    background-color: var(--bg-secondary, #2f2f2f);
+  }
+
+  a:hover {
+    color: var(--color-info, #24c8db);
+  }
+
+  input,
+  button {
+    color: var(--text-primary, #ffffff);
+    background-color: var(--bg-secondary, #0f0f0f98);
+  }
+  button:active {
+    background-color: var(--active-bg, #0f0f0f69);
+  }
+}
+
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.modal-content {
+  background: var(--bg-primary, #fff);
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 4px;
+  width: 600px;
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color, #ddd);
+}
+
+.modal-header button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 18px;
+  color: var(--text-secondary, #666);
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.modal-body {
+  padding: 12px;
+}
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-top: 1px solid var(--border-color, #ddd);
+}
+
+.footer-actions button {
+  margin-left: 8px;
+}
+
+</style>

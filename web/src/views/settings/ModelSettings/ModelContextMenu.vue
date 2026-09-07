@@ -1,0 +1,136 @@
+<template>
+  <UnifiedContextMenu
+    :visible="visible"
+    :x="x"
+    :y="y"
+    :menu-items="menuItems"
+    exclusive-key="model-context-menu"
+    @item-click="handleItemClick"
+    @close="$emit('close')"
+  />
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import UnifiedContextMenu, { type MenuItem } from '../../../components/UnifiedContextMenu.vue'
+import type { AIModel } from '../../../services/modelConfig'
+
+interface Props {
+  visible: boolean
+  x: number
+  y: number
+  model?: AIModel | null
+}
+
+const props = defineProps<Props>()
+
+const emit = defineEmits<{
+  'edit-model': []
+  'test-model': [{ testFunctionCalling: boolean }]
+  'delete-model': []
+  close: []
+}>()
+
+// 定义菜单项
+const menuItems = computed<MenuItem[]>(() => {
+  const isRemote = props.model?.isRemote
+  const items: MenuItem[] = []
+
+  // 远程模型也可以查看（协议/思考由管理员锁定，不可改）
+  items.push({
+    id: 'edit-model',
+    label: isRemote ? '查看模型' : '编辑模型',
+    action: 'edit-model',
+    icon: {
+      type: 'svg',
+      paths: [
+        { d: 'M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7' },
+        { d: 'M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z' }
+      ]
+    }
+  })
+  items.push({ type: 'divider' })
+
+  const isVision = props.model?.category === 'vision'
+
+  if (isVision) {
+    items.push({
+      id: 'test-model-vision',
+      label: '测试视觉能力',
+      action: 'test-model-vision',
+      icon: {
+        type: 'svg',
+        paths: [
+          { d: 'M9 12l2 2 4-4' },
+          { d: 'M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z' }
+        ]
+      }
+    })
+    items.push({
+      id: 'test-model-fc',
+      label: '测试 Function Calling',
+      action: 'test-model-fc',
+      icon: {
+        type: 'svg',
+        paths: [
+          { d: 'M14 2H6a2 2 0 0 0-2 2v16c0 1.1.9 2 2 2h12a2 2 0 0 0 2-2V8l-6-6z' },
+          { d: 'M14 3v5h5M16 13H8M16 17H8M10 9H8' }
+        ]
+      }
+    })
+  } else {
+    items.push({
+      id: 'test-model',
+      label: '测试模型',
+      action: 'test-model',
+      icon: {
+        type: 'svg',
+        paths: [
+          { d: 'M9 12l2 2 4-4' },
+          { d: 'M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9 9 4.03 9 9z' }
+        ]
+      }
+    })
+  }
+
+  if (!isRemote) {
+    items.push(
+      { type: 'divider' },
+      {
+        id: 'delete-model',
+        label: '删除模型',
+        action: 'delete-model',
+        danger: true,
+        icon: {
+          type: 'svg',
+          polylines: [{ points: '3,6 5,6 21,6' }],
+          paths: [{ d: 'M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2' }]
+        }
+      }
+    )
+  }
+
+  return items
+})
+
+// 处理菜单项点击
+const handleItemClick = (item: MenuItem) => {
+  switch (item.action) {
+    case 'edit-model':
+      emit('edit-model')
+      break
+    case 'test-model':
+      emit('test-model', { testFunctionCalling: false })
+      break
+    case 'test-model-vision':
+      emit('test-model', { testFunctionCalling: false })
+      break
+    case 'test-model-fc':
+      emit('test-model', { testFunctionCalling: true })
+      break
+    case 'delete-model':
+      emit('delete-model')
+      break
+  }
+}
+</script>

@@ -1,0 +1,25 @@
+[Unit]
+Description=ZError 题库服务端（OCS 网课助手 AI 题库）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zerror
+Group=zerror
+EnvironmentFile=-/etc/zerror/env
+Environment=ZERROR_DATA_DIR=/var/lib/zerror
+Environment=ZERROR_BIND=127.0.0.1:3000
+ExecStart=/opt/zerror/zerror-server
+Restart=on-failure
+RestartSec=3
+# 加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/zerror
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

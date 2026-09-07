@@ -1,0 +1,9 @@
+{$DOMAIN} {
+	encode zstd gzip
+	# SSE 需要禁用缓冲，flush_interval -1 表示立即转发
+	reverse_proxy zerror:3000 {
+		flush_interval -1
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+}
