@@ -16,21 +16,27 @@
 
 ## 快速开始（Docker Compose，推荐）
 
-需要一台有公网 IP 的 Linux VPS，已安装 Docker，防火墙放开 80（如需 HTTPS 再放开 443）。
+需要一台有公网 IP 的 Linux VPS，已安装 Docker。默认纯 HTTP、自定义端口、不带反向代理。
 
 ```bash
 git clone -b vps-server https://github.com/cailuoli520/ZError.git zerror && cd zerror
 cp deploy/env.example deploy/.env
-# 编辑 deploy/.env：
-#   没有域名 → SITE_ADDRESS=:80（保持默认，用 http://服务器IP 访问）
-#   有域名   → SITE_ADDRESS=你的域名（Caddy 自动申请证书，http 自动跳转 https）
-#   ZERROR_ADMIN_TOKEN=自定义管理员令牌（可留空自动生成）
+# 编辑 deploy/.env：PORT=对外端口（默认 3000），ZERROR_ADMIN_TOKEN=管理员令牌（可留空自动生成）
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
 docker compose -f deploy/docker-compose.yml logs -f zerror   # 首次启动会打印管理员令牌
 ```
 
-- 无域名：浏览器打开 `http://服务器IP`，OCS 的题库地址为 `http://服务器IP/query?token=…`。
-- 之后有了域名：把 DNS 解析到服务器，改 `deploy/.env` 的 `SITE_ADDRESS=你的域名`，再执行一次 `docker compose ... up -d`，即自动切到 HTTPS；服务端根据 Caddy 传来的 `X-Forwarded-Proto` 自动生成正确的链接，OCS 里把地址改成 `https://` 即可。
+防火墙放开 PORT 后，浏览器打开 `http://服务器IP:PORT` 登录后台；OCS 题库地址为 `http://服务器IP:PORT/query?token=…`（后台首页「OCS 配置」会按当前访问地址自动生成）。
+
+**以后需要 HTTPS**（要有域名并解析到服务器，放开 80/443）：
+
+```bash
+docker compose -f deploy/docker-compose.yml down
+# 编辑 deploy/.env：SITE_ADDRESS=你的域名
+docker compose -f deploy/docker-compose.https.yml --env-file deploy/.env up -d --build
+```
+
+`docker-compose.https.yml` 会多起一个 Caddy 容器自动申请、续期证书并把 80 跳转到 443；服务端按 `X-Forwarded-Proto` 自动生成 `https://` 链接，数据目录 `deploy/data` 不变，只需在 OCS 里把地址改成 `https://域名/query?token=…`。
 
 ## 原生安装（systemd）
 
